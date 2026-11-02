@@ -48,7 +48,8 @@ Available flags: `--host`/`-H`, `--api-base-path`/`-b`, `--token`/`-t`, `--defau
 - Get content by ID
 - Search for content using CQL (Confluence Query Language)
 - Create new content (pages, blog posts)
-- Update existing content
+- Update existing content, whole or as edits to the current body that tolerate how Confluence stores it
+- Find text in a page's storage body without fetching the body
 
 ## Setup
 
@@ -133,6 +134,8 @@ Available flags: `--host`/`-H`, `--api-base-path`/`-b`, `--token`/`-t`, `--defau
    - Uploads reject symlinks and non-regular files (FIFOs, devices, directories).
    - Downloads never overwrite an existing file (including a symlink) — they use an exclusive write.
    - Both directions enforce the configured hard size limit.
+
+   The same directories carry page bodies: with uploads enabled, `confluence_createContent` and `confluence_updateContent` read a body from `contentPath` and `confluence_updateContent` merges a locally edited copy from `editedPath`; with downloads enabled, `confluence_saveContentBody` saves a body and `confluence_updateContent` can save the stored body of the new version (`saveResult`).
 
    To create a personal access token:
    - In Confluence, select your profile picture at the top right
@@ -228,23 +231,42 @@ Parameters:
 - `title` (string, required): Title of the content
 - `spaceKey` (string, required): Space key where content will be created
 - `type` (string, default: "page"): Content type (page, blogpost, etc)
-- `content` (string, required): Content body in Confluence Data Center's storage format (XML-based storage format)
+- `content` (string, required): Content body in Confluence Data Center's storage format (XML-based storage format). Optional when `contentPath` is given.
+- `contentPath` (string, optional): Path to a UTF-8 file with the body, relative to the server-configured upload directory. Pass either `content` or `contentPath`. *(Only available when uploads are enabled.)*
 - `parentId` (string, optional): ID of the parent page (if creating a child page)
 - `output` (`ack` | `full`, optional): Return a compact acknowledgement or the full API response. Defaults to `ack`.
 
 #### 4. confluence_updateContent
 
-Update existing content in Confluence Data Center.
+Update existing content in Confluence Data Center: its title, parent and/or body. The new body comes from at most one source — whole (`content`, `contentPath`) or as changes to the current body (`edits`, `editedPath`).
 
 Parameters:
 - `contentId` (string, required): ID of the content to update
 - `title` (string, optional): New title of the content
 - `content` (string, optional): New content body in Confluence Data Center's storage format (XML-based)
-- `edits` (array of `{ oldStr, newStr }`, optional): Exact find/replace edits applied in order to the current storage body, so a small change doesn't need the whole body resent. Each `oldStr` must occur exactly once; if any edit doesn't match, nothing is saved. `version` must be the current version + 1. Can't be combined with `content`.
+- `contentPath` (string, optional): Path to a UTF-8 file with the whole new body, relative to the server-configured upload directory. *(Only available when uploads are enabled.)*
+- `edits` (array of `{ oldStr, newStr }`, optional): Find/replace edits applied in order to the current storage body, so a small change doesn't need the whole body resent. See [Edits and stored form](#edits-and-stored-form). If any edit doesn't match, nothing is saved. `version` must be the current version + 1.
+- `editedPath` (string, optional): Path to a copy of the current body edited locally — the `storage` or `editable` form saved by `confluence_saveContentBody` — relative to the server-configured upload directory. Only the differences from the current body are applied; space variants and invisible characters don't count as differences. `version` must be the current version + 1. *(Only available when uploads are enabled.)*
 - `version` (number, required): New version number (must be incremented from current version)
 - `versionComment` (string, optional): Comment for this version
 - `parentId` (string, optional): ID of the new parent page (moves the page under this parent; must be different from `contentId`; uses Confluence `ancestors`, same as `createContent` `parentId`)
+- `dryRun` (boolean, optional): Prepare the new body and report what would change — matched edits, changes, lengths, inline comments that would be lost — without saving.
+- `allowInlineCommentLoss` (boolean, optional): Allow a new body that removes `<ac:inline-comment-marker>` elements. Defaults to `false`: such an update is refused, because the comment threads would detach from the text.
+- `saveResult` (`storage` | `editable`, optional): After saving, write the stored body of the new version into the server-configured download directory in this form, so the next edit starts from the current text. A failed save is reported as `bodyUpdate.saveError` and does not undo the update. *(Only available when downloads are enabled.)*
 - `output` (`ack` | `full`, optional): Return a compact acknowledgement or the full API response. Defaults to `ack`.
+
+After a body change the server re-reads the page and adds `bodyUpdate` to the response: the source, the applied edits or the changes, and `verification` — `storedMatchesSent` (Confluence stored the content that was sent), `normalisedByServer` (it rewrote the form, e.g. character references or macro ids) and, when the content differs, `firstDifference`.
+
+##### Edits and stored form
+
+Confluence rewrites the storage body it saves: character references become characters (`&nbsp;` → U+00A0), every macro gets an `ac:macro-id`, empty parameters are dropped, and pages edited in the editor are full of non-breaking spaces. A client rarely reproduces that form byte for byte, so each `oldStr` is matched at the first of these levels where it occurs at all, and must occur exactly once there:
+
+1. `exact` — byte for byte;
+2. `markup` — also ignoring character references other than the five XML ones, `ac:macro-id` attributes and empty `ac:parameter` elements (not inside CDATA);
+3. `spacing` — also reading space variants (U+00A0, U+202F, …) as a plain space and ignoring invisible format characters (U+200B, U+00AD, …);
+4. `typography` — also reading typographic quotes and dashes as `'`, `"` and `-`.
+
+Only the tokens that differ between `oldStr` and `newStr` are rewritten, so the stored form around them — non-breaking spaces, character references, macro ids — is kept. The response reports the level each edit matched at and the changes it made.
 
 #### 5. confluence_searchSpace
 
@@ -283,3 +305,24 @@ Parameters:
 - `maxInlineBytes` (number, optional): Maximum bytes to embed inline when `returnContent` is `base64`/`text`/`image`. Larger files are omitted from the inline content and the entry carries a `contentOmittedReason` instead, so a retry with a higher value gets them. Defaults to 1 MiB and may not exceed 25 MiB, the ceiling on what can be downloaded at all — past that there are no bytes to have, so the request is rejected rather than promising a payload nothing can deliver. Applies to all three modes alike. Rendering has its own separate limit (below), so raising this never renders an image larger than 3,750,000 bytes; re-request that one with `base64` if you need its bytes.
 - `save` (boolean, optional): Save the attachment(s) into the server-configured download directory. Requires filesystem downloads to be enabled; existing files are never overwritten. *(Only available when downloads are enabled.)*
 - `saveName` (string, optional): File name (no directories) to use when saving a single attachment; defaults to the attachment's own name. *(Only available when downloads are enabled.)*
+
+#### 8. confluence_findInContent
+
+Find text in the storage body of a page without fetching the body. The query is matched with the same levels as `confluence_updateContent` edits; the strictest level with a match is used.
+
+Parameters:
+- `contentId` (string, required): ID of the content to search
+- `query` (string, required): Text to find
+- `contextChars` (number, optional): Characters of raw storage body returned before and after each match. Defaults to `200`.
+- `maxMatches` (number, optional): Maximum number of matches to return. Defaults to `20`; `total` always reports the full count.
+
+Returns the content `version`, `bodyLength`, `matchedAt` (the level), `total`, and for each match its `offset`, `before`, `match`, `after` and, when it sits inside an inline comment, `inlineCommentRef`.
+
+#### 9. confluence_saveContentBody
+
+Save the storage body of a page into the server-configured download directory and return the `version` and `savedBody` (`savedPath`, `form`, `length`) without the body. Only registered when filesystem downloads are enabled (see [Attachment filesystem access](#attachment-filesystem-access-opt-in)).
+
+Parameters:
+- `contentId` (string, required): ID of the content whose body to save
+- `form` (`storage` | `editable`, optional): `storage` (default) is the body exactly as stored. `editable` reads space variants as plain spaces and drops invisible characters, macro ids and empty parameters and decodes character references, so it can be edited as plain text and sent back with `editedPath` — not as a whole new body.
+- `saveName` (string, optional): File name (no directories). Defaults to `<contentId>-v<version>.<form>.xml`. Existing files are never overwritten.

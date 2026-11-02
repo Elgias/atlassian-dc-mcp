@@ -11,10 +11,14 @@ import {
   resolveOpenApiBase,
   resolveUploadSource,
   type AttachmentContentEncoding,
+  type AttachmentGateway,
   type AttachmentGatewaySide,
 } from '@atlassian-dc-mcp/common';
 import { CONFLUENCE_PRODUCT, getDefaultPageSize, getMissingConfig } from './config.js';
 import { ConfluenceBodyMode, shapeConfluenceContent } from './confluence-response-mapper.js';
+import { findInContent as findInStorageBody, saveContentBody as saveStorageBody } from './content-body.js';
+import type { BodyForm } from './content-files.js';
+import { updatePage as updateStoragePage, type PageUpdate } from './content-update.js';
 
 /**
  * Escapes user input for safe use inside a CQL quoted string.
@@ -23,33 +27,6 @@ import { ConfluenceBodyMode, shapeConfluenceContent } from './confluence-respons
  */
 export function escapeSearchTextForCql(searchText: string): string {
   return searchText.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
-export interface StorageEdit {
-  oldStr: string;
-  newStr: string;
-}
-
-/**
- * Applies exact-match edits to a storage-format body, in order. Each oldStr must occur exactly once
- * in the body as it stands after the previous edits; otherwise nothing is applied and an error is thrown.
- * Splicing by index (not String.replace) keeps `$` sequences in newStr literal.
- */
-export function applyStorageEdits(body: string, edits: StorageEdit[]): string {
-  return edits.reduce((current, edit, index) => {
-    if (!edit.oldStr) {
-      throw new Error(`edits[${index}].oldStr must not be empty`);
-    }
-    const count = current.split(edit.oldStr).length - 1;
-    if (count !== 1) {
-      const hint = count === 0
-        ? ' Copy it from the storage body exactly: storage keeps non-breaking spaces (U+00A0) and XML entities such as &amp;.'
-        : ' Include more surrounding text to make it unique.';
-      throw new Error(`edits[${index}].oldStr must occur exactly once in the page body, found ${count}.${hint}`);
-    }
-    const at = current.indexOf(edit.oldStr);
-    return current.slice(0, at) + edit.newStr + current.slice(at + edit.oldStr.length);
-  }, body);
 }
 
 export interface ConfluenceContent {
@@ -186,6 +163,21 @@ export class ConfluenceService {
    */
   async updateContent(contentId: string, content: ConfluenceContent) {
     return handleApiOperation(() => ContentResourceService.update2(contentId, content), 'Error updating content');
+  }
+
+  /** Updates title, parent and/or body, whole or as changes to the current body; see content-update.ts. */
+  async updatePage(update: PageUpdate, gateway: AttachmentGateway) {
+    return updateStoragePage(update, gateway);
+  }
+
+  /** Finds text in the storage body at the strictest match level; returns the raw text around matches, not the body. */
+  async findInContent(contentId: string, query: string, options?: { contextChars?: number; maxMatches?: number }) {
+    return findInStorageBody(contentId, query, options);
+  }
+
+  /** Saves the storage body into the download root, in storage or editable form. */
+  async saveContentBody(contentId: string, downloadSide: AttachmentGatewaySide, options?: { form?: BodyForm; saveName?: string }) {
+    return saveStorageBody(contentId, downloadSide, options);
   }
 
   /**
@@ -384,13 +376,37 @@ export const confluenceToolSchemas = {
     title: z.string().optional().describe("New title of the content"),
     content: z.string().optional().describe("New content body in Confluence Data Center storage format (XML-based)"),
     edits: z.array(z.object({
-      oldStr: z.string().describe("Text copied exactly from the current storage body; must occur exactly once"),
+      oldStr: z.string().describe("Text of the current storage body to replace; must occur exactly once. Non-breaking spaces may be typed as plain spaces."),
       newStr: z.string().describe("Replacement text; empty deletes oldStr"),
-    })).min(1).optional().describe("Exact find/replace edits applied in order to the current storage body, instead of sending the whole body in content. All or none: if any oldStr is missing or not unique, nothing is saved. Requires version to be the current version + 1. Cannot be combined with content."),
+    })).min(1).optional().describe("Find/replace edits applied in order to the current storage body, instead of sending the whole body in content. Each oldStr is matched exactly, else ignoring how Confluence stores markup (character references such as &nbsp;, ac:macro-id, empty parameters), else also ignoring space variants and invisible characters, else also typographic quotes and dashes; the first level with a match is used and it must match exactly once. Only the parts that differ between oldStr and newStr are rewritten, so the stored form around them is kept. All or none: if any oldStr is missing or not unique, nothing is saved. Requires version to be the current version + 1."),
     version: z.number().describe("New version number (must be incremented)"),
     versionComment: z.string().optional().describe("Comment for this version"),
     parentId: z.string().optional().describe("ID of the new parent page (moves the page under this parent; must be different from contentId; same mechanism as createContent parentId)"),
+    dryRun: z.boolean().optional().describe("Prepare the new body and report what would change (matched edits, changes, lengths, inline comments that would be lost) without saving"),
+    allowInlineCommentLoss: z.boolean().optional().describe("Allow a new body that removes <ac:inline-comment-marker> elements, detaching their comment threads. Defaults to false: such an update is refused."),
     output: z.enum(['ack', 'full']).optional().describe("Return a compact acknowledgement or the full API response. Defaults to ack.")
+  },
+  createContentFileFields: {
+    content: z.string().optional().describe("Content body in Confluence Data Center storage format. Pass either content or contentPath."),
+    contentPath: z.string().optional().describe("Path to a UTF-8 file with the storage-format body, relative to the server-configured upload directory. Use instead of content for large bodies.")
+  },
+  updateContentFileFields: {
+    contentPath: z.string().optional().describe("Path to a UTF-8 file with the whole new storage-format body, relative to the server-configured upload directory"),
+    editedPath: z.string().optional().describe("Path to a copy of the current body edited locally (storage or editable form from confluence_saveContentBody), relative to the server-configured upload directory. Only the differences from the current body are applied; space variants and invisible characters do not count as differences. Requires version to be the current version + 1.")
+  },
+  updateContentSaveFields: {
+    saveResult: z.enum(['storage', 'editable']).optional().describe("After saving, write the stored body of the new version into the server-configured download directory in this form, so the next edit starts from it")
+  },
+  findInContent: {
+    contentId: z.string().describe("ID of the content to search"),
+    query: z.string().min(1).describe("Text to find in the storage-format body, matched with the same levels as updateContent edits"),
+    contextChars: z.number().int().min(0).max(2000).optional().describe("Characters of raw storage body returned before and after each match. Defaults to 200."),
+    maxMatches: z.number().int().min(1).max(100).optional().describe("Maximum number of matches to return. Defaults to 20; total always reports the full count.")
+  },
+  saveContentBody: {
+    contentId: z.string().describe("ID of the content whose body to save"),
+    form: z.enum(['storage', 'editable']).optional().describe("storage (default): the body exactly as stored. editable: space variants as plain spaces, invisible characters, macro ids and empty parameters dropped and character references decoded, for editing as plain text and sending back with editedPath."),
+    saveName: z.string().optional().describe("File name (no directories). Defaults to <contentId>-v<version>.<form>.xml. Existing files are never overwritten.")
   },
   searchSpaces: {
     searchText: z.string().describe("Text to search for in Confluence Data Center space names or descriptions. Quotes and backslashes are escaped for CQL; pass the literal search phrase only (do not pre-escape)."),
