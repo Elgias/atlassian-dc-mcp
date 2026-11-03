@@ -22,6 +22,9 @@ export interface BodySource {
   editedPath?: string;
 }
 
+/** What an update does when the new body drops inline comment markers: `refuse` writes nothing, `report` writes and lists them. */
+export type InlineCommentLoss = 'refuse' | 'report';
+
 export interface PageUpdate {
   contentId: string;
   version: number;
@@ -31,7 +34,7 @@ export interface PageUpdate {
   output?: 'ack' | 'full';
   body: BodySource;
   dryRun?: boolean;
-  allowInlineCommentLoss?: boolean;
+  onInlineCommentLoss?: InlineCommentLoss;
   saveResult?: BodyForm;
 }
 
@@ -40,6 +43,7 @@ interface PlannedBody {
   body: string;
   applied?: AppliedStorageEdit[];
   changes?: BodyChange[];
+  lostInlineCommentRefs: string[];
 }
 
 interface BodyUpdateReport {
@@ -47,6 +51,7 @@ interface BodyUpdateReport {
   applied?: unknown[];
   changes?: unknown[];
   changeCount?: number;
+  lostInlineCommentRefs?: string[];
   verification?: ReturnType<typeof compareStoredBody>;
   verificationError?: string;
   savedBody?: SavedBody;
@@ -84,7 +89,11 @@ function assertEditableVersion(current: StorageContent, version: number): void {
   }
 }
 
-async function planBody(update: PageUpdate, current: StorageContent, gateway: AttachmentGateway): Promise<PlannedBody | undefined> {
+async function planBody(
+  update: PageUpdate,
+  current: StorageContent,
+  gateway: AttachmentGateway,
+): Promise<Omit<PlannedBody, 'lostInlineCommentRefs'> | undefined> {
   const { content, contentPath, edits, editedPath } = update.body;
   const currentBody = current.body.storage.value;
   if (provided(content)) {
@@ -121,7 +130,13 @@ function summarize(planned: PlannedBody): BodyUpdateReport {
       applied: planned.applied.map(({ index, matchedAt, offset, changes }) => ({ index, matchedAt, offset, changes: previewChanges(changes) })),
     } : {}),
     ...(planned.changes ? { changeCount: planned.changes.length, changes: previewChanges(planned.changes) } : {}),
+    ...(planned.lostInlineCommentRefs.length > 0 ? { lostInlineCommentRefs: planned.lostInlineCommentRefs } : {}),
   };
+}
+
+function refusesInlineCommentLoss(update: PageUpdate, planned: PlannedBody): boolean {
+  const byDefault: InlineCommentLoss = planned.source === 'edits' || planned.source === 'editedPath' ? 'refuse' : 'report';
+  return (update.onInlineCommentLoss ?? byDefault) === 'refuse';
 }
 
 function toUpdate(update: PageUpdate, current: StorageContent, body: string | undefined): ConfluenceContent {
@@ -162,9 +177,10 @@ async function reportAfterWrite(update: PageUpdate, planned: PlannedBody | undef
 
 /**
  * Updates a page's title, parent and/or body. A body comes whole (content, contentPath) or as changes to the
- * current body (edits, editedPath), which then require version = current + 1. Nothing is written when the new
- * body would drop an inline comment marker, unless allowInlineCommentLoss is set. After a body write the page
- * is re-read and the response reports whether Confluence stored what was sent.
+ * current body (edits, editedPath), which then require version = current + 1. A new body that drops inline
+ * comment markers is refused or reported per onInlineCommentLoss, by default refused for changes and reported
+ * for whole bodies. After a body write the page is re-read and the response reports whether Confluence stored
+ * what was sent.
  */
 export async function updatePage(update: PageUpdate, gateway: AttachmentGateway): Promise<ApiErrorResponse<unknown>> {
   const invalid = validationError(update);
@@ -176,25 +192,27 @@ export async function updatePage(update: PageUpdate, gateway: AttachmentGateway)
     return { success: false, error: `Failed to retrieve content with ID ${update.contentId}: ${current.error || 'Unknown error'}` };
   }
   const page = current.data;
-  const planned = await handleApiOperation(() => planBody(update, page, gateway), 'Error preparing the new body');
-  if (!planned.success) {
-    return planned;
+  const prepared = await handleApiOperation(() => planBody(update, page, gateway), 'Error preparing the new body');
+  if (!prepared.success) {
+    return prepared;
   }
-  const lost = planned.data ? lostInlineCommentRefs(page.body.storage.value, planned.data.body) : [];
-  if (lost.length > 0 && !update.allowInlineCommentLoss) {
-    return inlineCommentRefusal(lost);
+  const planned = prepared.data
+    ? { ...prepared.data, lostInlineCommentRefs: lostInlineCommentRefs(page.body.storage.value, prepared.data.body) }
+    : undefined;
+  if (planned && planned.lostInlineCommentRefs.length > 0 && refusesInlineCommentLoss(update, planned)) {
+    return inlineCommentRefusal(planned.lostInlineCommentRefs);
   }
   if (update.dryRun) {
-    return { success: true, data: dryRunResult(page, planned.data, lost) };
+    return { success: true, data: dryRunResult(page, planned) };
   }
   const saved = await handleApiOperation(
-    () => ContentResourceService.update2(update.contentId, toUpdate(update, page, planned.data?.body)),
+    () => ContentResourceService.update2(update.contentId, toUpdate(update, page, planned?.body)),
     'Error updating content',
   );
   if (!saved.success || !saved.data) {
     return saved;
   }
-  const bodyUpdate = await reportAfterWrite(update, planned.data, gateway);
+  const bodyUpdate = await reportAfterWrite(update, planned, gateway);
   const data = update.output === 'full' ? saved.data : shapeConfluenceMutationAck(saved.data);
   return { success: true, data: bodyUpdate ? { ...data, bodyUpdate } : data };
 }
@@ -203,12 +221,12 @@ function inlineCommentRefusal(lost: string[]): ApiErrorResponse<unknown> {
   return {
     success: false,
     error: `The new body removes ${lost.length} inline comment marker(s), which would detach their comment threads; ` +
-      'nothing was written. Keep the <ac:inline-comment-marker> elements, or pass allowInlineCommentLoss.',
+      'nothing was written. Keep the <ac:inline-comment-marker> elements, or pass onInlineCommentLoss: "report".',
     details: { lostInlineCommentRefs: lost },
   };
 }
 
-function dryRunResult(page: StorageContent, planned: PlannedBody | undefined, lost: string[]) {
+function dryRunResult(page: StorageContent, planned: PlannedBody | undefined) {
   return {
     dryRun: true,
     contentId: page.id,
@@ -216,6 +234,6 @@ function dryRunResult(page: StorageContent, planned: PlannedBody | undefined, lo
     ...(planned ? summarize(planned) : {}),
     lengthBefore: page.body.storage.value.length,
     ...(planned ? { lengthAfter: planned.body.length } : {}),
-    lostInlineCommentRefs: lost,
+    lostInlineCommentRefs: planned?.lostInlineCommentRefs ?? [],
   };
 }

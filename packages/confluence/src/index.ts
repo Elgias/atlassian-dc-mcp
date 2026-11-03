@@ -3,6 +3,7 @@ import { ConfluenceService, ConfluenceContent, confluenceToolSchemas } from './c
 import { shapeConfluenceMutationAck } from './confluence-response-mapper.js';
 import { CONFLUENCE_PRODUCT, getConfluenceRuntimeConfig, getDefaultPageSize } from './config.js';
 import { resolveCreateBody, type BodyForm } from './content-files.js';
+import type { InlineCommentLoss } from './content-update.js';
 import type { StorageEdit } from './storage-edits.js';
 import { createRequire } from 'node:module';
 
@@ -110,7 +111,7 @@ server.tool(
 
 server.tool(
   "confluence_updateContent",
-  `Update existing content in ${confluenceInstanceType}. Optionally move the page by setting parentId. The new body comes whole (content${bodyFilesEnabled ? ', contentPath' : ''}) or as changes to the current body (edits${bodyFilesEnabled ? ', editedPath' : ''}). An update that would remove inline comment markers is refused unless allowInlineCommentLoss is set. After a body change the page is re-read and bodyUpdate.verification reports whether Confluence stored what was sent.`,
+  `Update existing content in ${confluenceInstanceType}. Optionally move the page by setting parentId. The new body comes whole (content${bodyFilesEnabled ? ', contentPath' : ''}) or as changes to the current body (edits${bodyFilesEnabled ? ', editedPath' : ''}). Edits that would remove inline comment markers are refused by default; see onInlineCommentLoss. After a body change the page is re-read and bodyUpdate.verification reports whether Confluence stored what was sent.`,
   {
     ...confluenceToolSchemas.updateContent,
     ...(bodyFilesEnabled ? confluenceToolSchemas.updateContentFileFields : {}),
@@ -127,7 +128,7 @@ server.tool(
     versionComment?: string;
     parentId?: string;
     dryRun?: boolean;
-    allowInlineCommentLoss?: boolean;
+    onInlineCommentLoss?: InlineCommentLoss;
     saveResult?: BodyForm;
     output?: 'ack' | 'full';
   }) => {

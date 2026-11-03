@@ -251,11 +251,11 @@ Parameters:
 - `versionComment` (string, optional): Comment for this version
 - `parentId` (string, optional): ID of the new parent page (moves the page under this parent; must be different from `contentId`; uses Confluence `ancestors`, same as `createContent` `parentId`)
 - `dryRun` (boolean, optional): Prepare the new body and report what would change — matched edits, changes, lengths, inline comments that would be lost — without saving.
-- `allowInlineCommentLoss` (boolean, optional): Allow a new body that removes `<ac:inline-comment-marker>` elements. Defaults to `false`: such an update is refused, because the comment threads would detach from the text.
+- `onInlineCommentLoss` (`refuse` | `report`, optional): What to do when the new body removes `<ac:inline-comment-marker>` elements, which detaches their comment threads from the text. `refuse` writes nothing; `report` writes and lists the lost refs in `bodyUpdate.lostInlineCommentRefs`. Defaults to `refuse` for `edits` and `editedPath` and to `report` for `content` and `contentPath`.
 - `saveResult` (`storage` | `editable`, optional): After saving, write the stored body of the new version into the server-configured download directory in this form, so the next edit starts from the current text. A failed save is reported as `bodyUpdate.saveError` and does not undo the update. *(Only available when downloads are enabled.)*
 - `output` (`ack` | `full`, optional): Return a compact acknowledgement or the full API response. Defaults to `ack`.
 
-After a body change the server re-reads the page and adds `bodyUpdate` to the response: the source, the applied edits or the changes, and `verification` — `storedMatchesSent` (Confluence stored the content that was sent), `normalisedByServer` (it rewrote the form, e.g. character references or macro ids) and, when the content differs, `firstDifference`.
+After a body change the server re-reads the page and adds `bodyUpdate` to the response: the source, the applied edits or the changes, the inline comment refs the new body dropped, and `verification` — `storedMatchesSent` (Confluence stored the content that was sent), `normalisedByServer` (it rewrote the form, e.g. character references or macro ids) and, when the content differs, `firstDifference`.
 
 ##### Edits and stored form
 

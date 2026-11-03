@@ -93,15 +93,28 @@ describe('updatePage', () => {
     expect(result.data).toMatchObject({ bodyUpdate: { source: 'contentPath' } });
   });
 
-  it('refuses any new body that drops an inline comment marker unless allowed', async () => {
+  it('refuses edits that drop an inline comment marker unless told to report', async () => {
     getContentById.mockResolvedValue(page(7, BODY));
+    const edits = [{ oldStr: MARKER, newStr: 'reviewed' }];
 
-    const refused = await run({ body: { content: '<p>reviewed text</p>' } });
+    const refused = await run({ body: { edits } });
     expect(refused).toMatchObject({ success: false, details: { lostInlineCommentRefs: ['r1'] } });
     expect(update2).not.toHaveBeenCalled();
 
-    const allowed = await run({ body: { content: '<p>reviewed text</p>' }, allowInlineCommentLoss: true });
-    expect(allowed.success).toBe(true);
+    const reported = await run({ body: { edits }, onInlineCommentLoss: 'report' });
+    expect(reported.data).toMatchObject({ bodyUpdate: { lostInlineCommentRefs: ['r1'] } });
+    expect(update2).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes a whole body that drops an inline comment marker and reports it, unless told to refuse', async () => {
+    getContentById.mockResolvedValue(page(7, BODY));
+
+    const reported = await run({ body: { content: '<p>reviewed text</p>' } });
+    expect(reported.data).toMatchObject({ bodyUpdate: { source: 'content', lostInlineCommentRefs: ['r1'] } });
+    expect(update2).toHaveBeenCalledTimes(1);
+
+    const refused = await run({ body: { content: '<p>reviewed text</p>' }, onInlineCommentLoss: 'refuse' });
+    expect(refused).toMatchObject({ success: false, details: { lostInlineCommentRefs: ['r1'] } });
     expect(update2).toHaveBeenCalledTimes(1);
   });
 
