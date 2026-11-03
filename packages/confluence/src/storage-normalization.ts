@@ -72,6 +72,26 @@ function foldCharacter(ch: string, level: MatchLevel): string {
   return level === 'typography' ? TYPOGRAPHIC[ch] ?? ch : ch;
 }
 
+/** Only the first character of a whitespace run can start the macro-id pattern; retrying inside the run would be quadratic. */
+function startsWhitespaceRun(raw: string, at: number): boolean {
+  return /\s/.test(raw[at]) && (at === 0 || !/\s/.test(raw[at - 1]));
+}
+
+/** End of the CDATA section opening at `start`; an unterminated one runs to the end. */
+function cdataEnd(raw: string, start: number): number {
+  const close = raw.indexOf(CDATA_CLOSE, start + CDATA_OPEN.length);
+  return close === -1 ? raw.length : close + CDATA_CLOSE.length;
+}
+
+/** [start, end) of every CDATA section of a storage string, in order. */
+export function cdataRanges(raw: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (let start = raw.indexOf(CDATA_OPEN); start !== -1; start = raw.indexOf(CDATA_OPEN, ranges[ranges.length - 1].end)) {
+    ranges.push({ start, end: cdataEnd(raw, start) });
+  }
+  return ranges;
+}
+
 function stickyMatch(pattern: RegExp, raw: string, at: number): RegExpExecArray | null {
   pattern.lastIndex = at;
   return pattern.exec(raw);
@@ -102,7 +122,9 @@ function markupAt(raw: string, at: number): { length: number; replacement: strin
     const decoded = reference && !XML_ENTITIES.has(reference[1]) ? decodeReference(reference[1]) : undefined;
     return reference && decoded !== undefined ? { length: reference[0].length, replacement: decoded } : undefined;
   }
-  const dropped = ch === '<' ? stickyMatch(EMPTY_PARAMETER, raw, at) : /\s/.test(ch) ? stickyMatch(MACRO_ID_ATTRIBUTE, raw, at) : null;
+  const dropped = ch === '<'
+    ? stickyMatch(EMPTY_PARAMETER, raw, at)
+    : startsWhitespaceRun(raw, at) ? stickyMatch(MACRO_ID_ATTRIBUTE, raw, at) : null;
   return dropped ? { length: dropped[0].length, replacement: '' } : undefined;
 }
 
@@ -117,8 +139,7 @@ export function normalizeStorage(raw: string, level: MatchLevel): NormalizedStor
   let at = 0;
   while (at < raw.length) {
     if (raw.startsWith(CDATA_OPEN, at)) {
-      const close = raw.indexOf(CDATA_CLOSE, at + CDATA_OPEN.length);
-      const end = close === -1 ? raw.length : close + CDATA_CLOSE.length;
+      const end = cdataEnd(raw, at);
       for (let i = at; i < end; i++) {
         builder.push(foldCharacter(raw[i], level), i);
       }

@@ -24,6 +24,9 @@ export interface SavedBody {
 
 /** Reads a UTF-8 file from the upload root; page bodies share the attachment exchange directories. */
 export async function readUploadedText(requestedPath: string, side: AttachmentGatewaySide): Promise<string> {
+  if (!side.enabled) {
+    throw new Error('Reading page bodies from files needs the upload directory, which is disabled on this server');
+  }
   const { absolutePath } = await resolveUploadSource({ requestedPath, side });
   return readFile(absolutePath, 'utf8');
 }

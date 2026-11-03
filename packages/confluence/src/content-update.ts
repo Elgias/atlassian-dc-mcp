@@ -65,9 +65,12 @@ function provided(value: string | undefined): value is string {
   return value !== undefined && value !== '';
 }
 
-function validationError(update: PageUpdate): string | undefined {
+function validationError(update: PageUpdate, gateway: AttachmentGateway): string | undefined {
   if (update.parentId && update.parentId === update.contentId) {
     return `parentId (${update.parentId}) must be different from contentId; a page cannot be its own parent`;
+  }
+  if (update.saveResult && !gateway.download.enabled) {
+    return 'saveResult needs the download directory, and saving files is disabled on this server; nothing was written';
   }
   const { content, contentPath, edits, editedPath } = update.body;
   const sources = Object.entries({ content, contentPath, editedPath })
@@ -183,7 +186,7 @@ async function reportAfterWrite(update: PageUpdate, planned: PlannedBody | undef
  * what was sent.
  */
 export async function updatePage(update: PageUpdate, gateway: AttachmentGateway): Promise<ApiErrorResponse<unknown>> {
-  const invalid = validationError(update);
+  const invalid = validationError(update, gateway);
   if (invalid) {
     return { success: false, error: invalid };
   }
@@ -199,11 +202,12 @@ export async function updatePage(update: PageUpdate, gateway: AttachmentGateway)
   const planned = prepared.data
     ? { ...prepared.data, lostInlineCommentRefs: lostInlineCommentRefs(page.body.storage.value, prepared.data.body) }
     : undefined;
-  if (planned && planned.lostInlineCommentRefs.length > 0 && refusesInlineCommentLoss(update, planned)) {
-    return inlineCommentRefusal(planned.lostInlineCommentRefs);
-  }
+  const refused = planned !== undefined && planned.lostInlineCommentRefs.length > 0 && refusesInlineCommentLoss(update, planned);
   if (update.dryRun) {
-    return { success: true, data: dryRunResult(page, planned) };
+    return { success: true, data: { ...dryRunResult(page, planned), ...(refused ? { wouldBeRefused: true } : {}) } };
+  }
+  if (planned && refused) {
+    return inlineCommentRefusal(planned.lostInlineCommentRefs);
   }
   const saved = await handleApiOperation(
     () => ContentResourceService.update2(update.contentId, toUpdate(update, page, planned?.body)),

@@ -388,14 +388,14 @@ export const confluenceToolSchemas = {
   },
   createContentFileFields: {
     content: z.string().optional().describe("Content body in Confluence Data Center storage format. Pass either content or contentPath."),
-    contentPath: z.string().optional().describe("Path to a UTF-8 file with the storage-format body, relative to the server-configured upload directory. Use instead of content for large bodies.")
+    contentPath: z.string().optional().describe("Path to a UTF-8 file with the storage-format body, relative to the server-configured upload directory. Use instead of content for large bodies. Needs the upload directory to be enabled on the server.")
   },
   updateContentFileFields: {
-    contentPath: z.string().optional().describe("Path to a UTF-8 file with the whole new storage-format body, relative to the server-configured upload directory"),
-    editedPath: z.string().optional().describe("Path to a copy of the current body edited locally (storage or editable form from confluence_saveContentBody), relative to the server-configured upload directory. Only the differences from the current body are applied; space variants and invisible characters do not count as differences. Requires version to be the current version + 1.")
+    contentPath: z.string().optional().describe("Path to a UTF-8 file with the whole new storage-format body, relative to the server-configured upload directory. Needs the upload directory to be enabled on the server."),
+    editedPath: z.string().optional().describe("Path to a copy of the current body edited locally (storage or editable form from confluence_saveContentBody), relative to the server-configured upload directory. Only the differences from the current body are applied; space variants and invisible characters do not count as differences. Requires version to be the current version + 1. Needs the upload directory to be enabled on the server.")
   },
   updateContentSaveFields: {
-    saveResult: z.enum(['storage', 'editable']).optional().describe("After saving, write the stored body of the new version into the server-configured download directory in this form, so the next edit starts from it")
+    saveResult: z.enum(['storage', 'editable']).optional().describe("After saving, write the stored body of the new version into the server-configured download directory in this form, so the next edit starts from it. Needs the download directory to be enabled on the server; otherwise the update is refused before anything is written.")
   },
   findInContent: {
     contentId: z.string().describe("ID of the content to search"),

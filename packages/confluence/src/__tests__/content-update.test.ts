@@ -129,6 +129,28 @@ describe('updatePage', () => {
     });
   });
 
+  it('reports on dryRun what a refused update would do', async () => {
+    getContentById.mockResolvedValue(page(7, BODY));
+
+    const result = await run({ body: { edits: [{ oldStr: MARKER, newStr: 'reviewed' }] }, dryRun: true });
+
+    expect(update2).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      success: true,
+      data: { dryRun: true, source: 'edits', wouldBeRefused: true, lostInlineCommentRefs: ['r1'], lengthAfter: expect.any(Number) },
+    });
+  });
+
+  it('refuses body files and saveResult when their directory is disabled, writing nothing', async () => {
+    getContentById.mockResolvedValue(page(7, BODY));
+    gateway = { upload: { ...gateway.upload, enabled: false }, download: { ...gateway.download, enabled: false } };
+
+    expect((await run({ body: { contentPath: 'page.xml' } })).error).toMatch(/upload directory, which is disabled/);
+    expect((await run({ body: { editedPath: 'page.xml' } })).error).toMatch(/upload directory, which is disabled/);
+    expect((await run({ body: { content: BODY }, saveResult: 'storage' })).error).toMatch(/saving files is disabled/);
+    expect(update2).not.toHaveBeenCalled();
+  });
+
   it('rejects more than one body source and a move under itself before reading the page', async () => {
     expect((await run({ body: { content: '<p/>', edits: [{ oldStr: 'a', newStr: 'b' }] } })).error)
       .toMatch(/at most one of content, contentPath, edits and editedPath; got content, edits/);

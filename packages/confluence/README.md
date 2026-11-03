@@ -232,7 +232,7 @@ Parameters:
 - `spaceKey` (string, required): Space key where content will be created
 - `type` (string, default: "page"): Content type (page, blogpost, etc)
 - `content` (string, required): Content body in Confluence Data Center's storage format (XML-based storage format). Optional when `contentPath` is given.
-- `contentPath` (string, optional): Path to a UTF-8 file with the body, relative to the server-configured upload directory. Pass either `content` or `contentPath`. *(Only available when uploads are enabled.)*
+- `contentPath` (string, optional): Path to a UTF-8 file with the body, relative to the server-configured upload directory. Pass either `content` or `contentPath`. Needs uploads to be enabled on the server.
 - `parentId` (string, optional): ID of the parent page (if creating a child page)
 - `output` (`ack` | `full`, optional): Return a compact acknowledgement or the full API response. Defaults to `ack`.
 
@@ -244,15 +244,15 @@ Parameters:
 - `contentId` (string, required): ID of the content to update
 - `title` (string, optional): New title of the content
 - `content` (string, optional): New content body in Confluence Data Center's storage format (XML-based)
-- `contentPath` (string, optional): Path to a UTF-8 file with the whole new body, relative to the server-configured upload directory. *(Only available when uploads are enabled.)*
+- `contentPath` (string, optional): Path to a UTF-8 file with the whole new body, relative to the server-configured upload directory. Needs uploads to be enabled on the server.
 - `edits` (array of `{ oldStr, newStr }`, optional): Find/replace edits applied in order to the current storage body, so a small change doesn't need the whole body resent. See [Edits and stored form](#edits-and-stored-form). If any edit doesn't match, nothing is saved. `version` must be the current version + 1.
-- `editedPath` (string, optional): Path to a copy of the current body edited locally — the `storage` or `editable` form saved by `confluence_saveContentBody` — relative to the server-configured upload directory. Only the differences from the current body are applied; space variants and invisible characters don't count as differences. `version` must be the current version + 1. *(Only available when uploads are enabled.)*
+- `editedPath` (string, optional): Path to a copy of the current body edited locally — the `storage` or `editable` form saved by `confluence_saveContentBody` — relative to the server-configured upload directory. Only the differences from the current body are applied; space variants and invisible characters don't count as differences. `version` must be the current version + 1. Needs uploads to be enabled on the server.
 - `version` (number, required): New version number (must be incremented from current version)
 - `versionComment` (string, optional): Comment for this version
 - `parentId` (string, optional): ID of the new parent page (moves the page under this parent; must be different from `contentId`; uses Confluence `ancestors`, same as `createContent` `parentId`)
-- `dryRun` (boolean, optional): Prepare the new body and report what would change — matched edits, changes, lengths, inline comments that would be lost — without saving.
+- `dryRun` (boolean, optional): Prepare the new body and report what would change — matched edits, changes, lengths, inline comments that would be lost and `wouldBeRefused` when the update would be refused for them — without saving.
 - `onInlineCommentLoss` (`refuse` | `report`, optional): What to do when the new body removes `<ac:inline-comment-marker>` elements, which detaches their comment threads from the text. `refuse` writes nothing; `report` writes and lists the lost refs in `bodyUpdate.lostInlineCommentRefs`. Defaults to `refuse` for `edits` and `editedPath` and to `report` for `content` and `contentPath`.
-- `saveResult` (`storage` | `editable`, optional): After saving, write the stored body of the new version into the server-configured download directory in this form, so the next edit starts from the current text. A failed save is reported as `bodyUpdate.saveError` and does not undo the update. *(Only available when downloads are enabled.)*
+- `saveResult` (`storage` | `editable`, optional): After saving, write the stored body of the new version into the server-configured download directory in this form, so the next edit starts from the current text. A failed save is reported as `bodyUpdate.saveError` and does not undo the update. Needs downloads to be enabled on the server; otherwise the update is refused before anything is written.
 - `output` (`ack` | `full`, optional): Return a compact acknowledgement or the full API response. Defaults to `ack`.
 
 After a body change the server re-reads the page and adds `bodyUpdate` to the response: the source, the applied edits or the changes, the inline comment refs the new body dropped, and `verification` — `storedMatchesSent` (Confluence stored the content that was sent), `normalisedByServer` (it rewrote the form, e.g. character references or macro ids) and, when the content differs, `firstDifference`.

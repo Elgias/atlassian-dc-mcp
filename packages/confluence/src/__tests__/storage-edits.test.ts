@@ -96,6 +96,17 @@ describe('applyStorageEdits', () => {
     expect(result.applied[0].matchedAt).toBe('typography');
   });
 
+  it('writes a typographic change that newStr asks for when the match was at the typography level', () => {
+    const result = applyStorageEdits('<p>a \u2013 b, it\u2019s</p>', [{ oldStr: "a - b, it's", newStr: "a \u2014 b, it's" }]);
+    expect(result.body).toBe('<p>a \u2014 b, it\u2019s</p>');
+    expect(result.applied[0]).toMatchObject({ matchedAt: 'typography', changes: [{ removed: '\u2013', inserted: '\u2014' }] });
+  });
+
+  it('reports an oldStr that normalises to nothing as not found', () => {
+    expect(() => edit(body, '\u200b', 'x')).toThrow(/edits\[0\]\.oldStr was not found/);
+    expect(() => edit(body, ' ac:macro-id="m-1"', 'x')).toThrow(/edits\[0\]\.oldStr was not found/);
+  });
+
   it('reports only the tokens that changed', () => {
     const [applied] = applyStorageEdits('<p>one two three</p>', [{ oldStr: 'one two three', newStr: 'one 2 three' }]).applied;
     expect(applied.changes).toEqual([{ offset: 7, removed: 'two', inserted: '2' }]);
@@ -152,6 +163,12 @@ describe('findInStorage', () => {
 });
 
 describe('inline comment markers', () => {
+  it('ignores marker text inside CDATA', () => {
+    const code = '<ac:plain-text-body><![CDATA[<ac:inline-comment-marker ac:ref="doc">x</ac:inline-comment-marker>]]></ac:plain-text-body>';
+    expect(lostInlineCommentRefs(code + MARKER, code.replace('doc', 'other') + MARKER)).toEqual([]);
+    expect(lostInlineCommentRefs(code + MARKER, code)).toEqual(['r1']);
+  });
+
   it('reports refs that a new body drops', () => {
     expect(lostInlineCommentRefs(MARKER, 'reviewed text')).toEqual(['r1']);
     expect(lostInlineCommentRefs(MARKER, MARKER.replace('text', 'words'))).toEqual([]);

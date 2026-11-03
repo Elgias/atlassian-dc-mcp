@@ -37,7 +37,6 @@ const server = createMcpServer({
 });
 
 const attachmentGateway = resolveAttachmentGateway(CONFLUENCE_PRODUCT);
-const bodyFilesEnabled = attachmentGateway.upload.enabled;
 const downloadSaveEnabled = attachmentGateway.download.enabled;
 
 // Add Confluence content tools
@@ -65,8 +64,8 @@ server.tool(
 
 server.tool(
   "confluence_createContent",
-  `Create new content in ${confluenceInstanceType}${bodyFilesEnabled ? '. The body can also be read from a file in the server-configured upload directory (contentPath).' : ''}`,
-  { ...confluenceToolSchemas.createContent, ...(bodyFilesEnabled ? confluenceToolSchemas.createContentFileFields : {}) },
+  `Create new content in ${confluenceInstanceType}. The body can also be read from a file in the server-configured upload directory (contentPath).`,
+  { ...confluenceToolSchemas.createContent, ...confluenceToolSchemas.createContentFileFields },
   async ({ title, spaceKey, type, content, contentPath, parentId, output }: {
     title: string;
     spaceKey: string;
@@ -111,11 +110,11 @@ server.tool(
 
 server.tool(
   "confluence_updateContent",
-  `Update existing content in ${confluenceInstanceType}. Optionally move the page by setting parentId. The new body comes whole (content${bodyFilesEnabled ? ', contentPath' : ''}) or as changes to the current body (edits${bodyFilesEnabled ? ', editedPath' : ''}). Edits that would remove inline comment markers are refused by default; see onInlineCommentLoss. After a body change the page is re-read and bodyUpdate.verification reports whether Confluence stored what was sent.`,
+  `Update existing content in ${confluenceInstanceType}. Optionally move the page by setting parentId. The new body comes whole (content, contentPath) or as changes to the current body (edits, editedPath); contentPath, editedPath and saveResult need the server-configured upload or download directory. Edits that would remove inline comment markers are refused by default; see onInlineCommentLoss. After a body change the page is re-read and bodyUpdate.verification reports whether Confluence stored what was sent.`,
   {
     ...confluenceToolSchemas.updateContent,
-    ...(bodyFilesEnabled ? confluenceToolSchemas.updateContentFileFields : {}),
-    ...(downloadSaveEnabled ? confluenceToolSchemas.updateContentSaveFields : {}),
+    ...confluenceToolSchemas.updateContentFileFields,
+    ...confluenceToolSchemas.updateContentSaveFields,
   },
   async (args: {
     contentId: string;

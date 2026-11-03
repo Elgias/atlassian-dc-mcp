@@ -1,6 +1,7 @@
 import { diffSequences, type DiffHunk } from './myers-diff.js';
 import {
   MATCH_LEVELS,
+  cdataRanges,
   normalizeStorage,
   tokenize,
   type MatchLevel,
@@ -44,7 +45,7 @@ export const MAX_DIFF_EDITS = 2000;
 const CLOSING_TAG = /<\/[^<>]*>/g;
 const INLINE_COMMENT_OPEN = '<ac:inline-comment-marker';
 const INLINE_COMMENT_CLOSE = '</ac:inline-comment-marker>';
-const INLINE_COMMENT_REF = /<ac:inline-comment-marker\b[^>]*\bac:ref="([^"]+)"/g;
+const MARKER_REF = /\bac:ref="([^"]+)"/;
 
 interface Side {
   raw: string;
@@ -205,7 +206,9 @@ export function applyStorageEdits(body: string, edits: StorageEdit[]): { body: s
       throw new Error(`edits[${index}].oldStr must not be empty`);
     }
     const { level, anchor } = locateUnique(current, edit.oldStr, index);
-    const splices = splicesFor(anchor, toSide(edit.newStr, level));
+    // Typographic characters in newStr are written as given; the typography fold is 1:1, so spacing offsets fit the anchor.
+    const diffLevel = level === 'typography' ? 'spacing' : level;
+    const splices = splicesFor({ ...anchor, side: toSide(edit.oldStr, diffLevel) }, toSide(edit.newStr, diffLevel));
     const changes = toChanges(current, splices);
     current = applySplices(current, splices);
     return { index, matchedAt: level, offset: anchor.body.rawAt[anchor.offset], changes };
@@ -238,10 +241,31 @@ export function inlineCommentRefAt(body: string, offset: number): string | undef
   return /\bac:ref="([^"]+)"/.exec(body.slice(open, tagEnd === -1 ? undefined : tagEnd))?.[1];
 }
 
+/** Refs of the inline comment markers of a body; marker text inside CDATA is code, not a marker. */
+function inlineCommentRefs(body: string): Set<string> {
+  const refs = new Set<string>();
+  const cdata = cdataRanges(body);
+  let next = 0;
+  for (let at = body.indexOf(INLINE_COMMENT_OPEN); at !== -1; at = body.indexOf(INLINE_COMMENT_OPEN, at + 1)) {
+    while (next < cdata.length && cdata[next].end <= at) {
+      next++;
+    }
+    if (next < cdata.length && cdata[next].start <= at) {
+      continue;
+    }
+    const tagEnd = body.indexOf('>', at);
+    const ref = MARKER_REF.exec(body.slice(at, tagEnd === -1 ? undefined : tagEnd))?.[1];
+    if (ref) {
+      refs.add(ref);
+    }
+  }
+  return refs;
+}
+
 /** Inline comment refs present in `before` and missing from `after`. */
 export function lostInlineCommentRefs(before: string, after: string): string[] {
-  const kept = new Set(Array.from(after.matchAll(INLINE_COMMENT_REF), m => m[1]));
-  return [...new Set(Array.from(before.matchAll(INLINE_COMMENT_REF), m => m[1]))].filter(ref => !kept.has(ref));
+  const kept = inlineCommentRefs(after);
+  return [...inlineCommentRefs(before)].filter(ref => !kept.has(ref));
 }
 
 function describeMatch(body: string, start: number, end: number, contextChars: number): StorageMatch {

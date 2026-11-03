@@ -1,4 +1,4 @@
-import { editableText, normalizeStorage, tokenize, type NormalizedStorage } from '../storage-normalization.js';
+import { cdataRanges, editableText, normalizeStorage, tokenize, type NormalizedStorage } from '../storage-normalization.js';
 import { XHTML_ENTITIES } from '../xhtml-entities.js';
 
 function expectConsistentMap(raw: string, normalized: NormalizedStorage) {
@@ -56,6 +56,16 @@ describe('normalizeStorage', () => {
     const quote = '<ac:structured-macro ac:name="code'.length;
     expect(normalized.rawAt[quote + 1]).toBe(raw.indexOf('>'));
     expectConsistentMap(raw, normalized);
+  });
+
+  it('drops a macro id preceded by a run of whitespace and keeps whitespace runs elsewhere', () => {
+    const raw = '<ac:structured-macro ac:name="toc"   \n  ac:macro-id="m"><p>a     b</p></ac:structured-macro>';
+    expect(normalizeStorage(raw, 'markup').text).toBe('<ac:structured-macro ac:name="toc"><p>a     b</p></ac:structured-macro>');
+  });
+
+  it('lists CDATA sections, an unterminated one running to the end', () => {
+    expect(cdataRanges('a<![CDATA[x]]>b<![CDATA[y')).toEqual([{ start: 1, end: 14 }, { start: 15, end: 25 }]);
+    expect(cdataRanges('<p/>')).toEqual([]);
   });
 
   it('leaves CDATA alone at the markup level but folds spacing inside it', () => {
