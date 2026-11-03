@@ -46,6 +46,11 @@ describe('normalizeStorage', () => {
     expectConsistentMap(raw, normalized);
   });
 
+  it('keeps numeric references to the XML special characters and to surrogates encoded', () => {
+    const raw = '&#60;&#x3C;&#62;&#38;&#34;&#39;&#xD800;&#xDFFF;&#xE000;';
+    expect(normalizeStorage(raw, 'markup').text).toBe('&#60;&#x3C;&#62;&#38;&#34;&#39;&#xD800;&#xDFFF;\ue000');
+  });
+
   it('drops macro ids and empty parameters at the markup level, attaching them to the preceding character', () => {
     const raw = '<ac:structured-macro ac:name="code" ac:macro-id="m-1"><ac:parameter ac:name="width" />' +
       '<ac:parameter ac:name="x"></ac:parameter><ac:parameter ac:name="language">sql</ac:parameter></ac:structured-macro>';

@@ -111,27 +111,38 @@ function shifted(hunks: DiffHunk[], aOffset: number, bOffset: number): DiffHunk[
   return hunks.map(h => ({ aStart: h.aStart + aOffset, aEnd: h.aEnd + aOffset, bStart: h.bStart + bOffset, bEnd: h.bEnd + bOffset }));
 }
 
-/**
- * Token-level hunks between two sides: first between segments (text up to each closing tag), then
- * between the tokens of each differing segment run, like a line diff refined to words.
- */
-function diffTokens(a: Side, b: Side): DiffHunk[] {
-  const id = interner();
-  const tokenIds = (side: Side) => side.tokens.map(({ start, end }) => id(side.normalized.text.slice(start, end)));
-  const [aIds, bIds] = [tokenIds(a), tokenIds(b)];
+function tokenIds(side: Side, id: (text: string) => number): number[] {
+  return side.tokens.map(({ start, end }) => id(side.normalized.text.slice(start, end)));
+}
+
+/** First token of segment `index`, or the token count past the last segment. */
+function segmentStart(ranges: Array<{ start: number }>, index: number, tokenCount: number): number {
+  return index < ranges.length ? ranges[index].start : tokenCount;
+}
+
+/** Hunks between the segments of two sides (text up to each closing tag), as token index ranges. */
+function segmentHunks(a: Side, b: Side, id: (text: string) => number): DiffHunk[] {
   const [aSegments, bSegments] = [segments(a), segments(b)];
   const segmentIds = (side: Side, ranges: Array<{ start: number; end: number }>) =>
     ranges.map(r => id(side.normalized.text.slice(side.tokens[r.start].start, side.tokens[r.end - 1].end)));
-  const segmentHunks = diffSequences(segmentIds(a, aSegments), segmentIds(b, bSegments), MAX_DIFF_EDITS)
+  const hunks = diffSequences(segmentIds(a, aSegments), segmentIds(b, bSegments), MAX_DIFF_EDITS)
     ?? wholeHunk(aSegments.length, bSegments.length);
-  const tokenAt = (ranges: Array<{ start: number }>, index: number, total: number) => (index < ranges.length ? ranges[index].start : total);
-  return segmentHunks.flatMap(h => {
-    const aFrom = tokenAt(aSegments, h.aStart, aIds.length);
-    const aTo = tokenAt(aSegments, h.aEnd, aIds.length);
-    const bFrom = tokenAt(bSegments, h.bStart, bIds.length);
-    const bTo = tokenAt(bSegments, h.bEnd, bIds.length);
-    const refined = diffSequences(aIds.slice(aFrom, aTo), bIds.slice(bFrom, bTo), MAX_DIFF_EDITS) ?? wholeHunk(aTo - aFrom, bTo - bFrom);
-    return shifted(refined, aFrom, bFrom);
+  return hunks.map(h => ({
+    aStart: segmentStart(aSegments, h.aStart, a.tokens.length),
+    aEnd: segmentStart(aSegments, h.aEnd, a.tokens.length),
+    bStart: segmentStart(bSegments, h.bStart, b.tokens.length),
+    bEnd: segmentStart(bSegments, h.bEnd, b.tokens.length),
+  }));
+}
+
+/** Token-level hunks between two sides: a segment diff, refined to tokens inside each differing run. */
+function diffTokens(a: Side, b: Side): DiffHunk[] {
+  const id = interner();
+  const [aIds, bIds] = [tokenIds(a, id), tokenIds(b, id)];
+  return segmentHunks(a, b, id).flatMap(h => {
+    const refined = diffSequences(aIds.slice(h.aStart, h.aEnd), bIds.slice(h.bStart, h.bEnd), MAX_DIFF_EDITS)
+      ?? wholeHunk(h.aEnd - h.aStart, h.bEnd - h.bStart);
+    return shifted(refined, h.aStart, h.bStart);
   });
 }
 
@@ -201,7 +212,8 @@ function locateUnique(body: string, oldStr: string, index: number): UniqueMatch 
  */
 export function applyStorageEdits(body: string, edits: StorageEdit[]): { body: string; applied: AppliedStorageEdit[] } {
   let current = body;
-  const applied = edits.map((edit, index) => {
+  const applied: AppliedStorageEdit[] = [];
+  for (const [index, edit] of edits.entries()) {
     if (!edit.oldStr) {
       throw new Error(`edits[${index}].oldStr must not be empty`);
     }
@@ -209,10 +221,9 @@ export function applyStorageEdits(body: string, edits: StorageEdit[]): { body: s
     // Typographic characters in newStr are written as given; the typography fold is 1:1, so spacing offsets fit the anchor.
     const diffLevel = level === 'typography' ? 'spacing' : level;
     const splices = splicesFor({ ...anchor, side: toSide(edit.oldStr, diffLevel) }, toSide(edit.newStr, diffLevel));
-    const changes = toChanges(current, splices);
+    applied.push({ index, matchedAt: level, offset: anchor.body.rawAt[anchor.offset], changes: toChanges(current, splices) });
     current = applySplices(current, splices);
-    return { index, matchedAt: level, offset: anchor.body.rawAt[anchor.offset], changes };
-  });
+  }
   return { body: current, applied };
 }
 
@@ -234,7 +245,7 @@ export function inlineCommentRefAt(body: string, offset: number): string | undef
     return undefined;
   }
   const close = body.indexOf(INLINE_COMMENT_CLOSE, open);
-  if (close !== -1 && close < offset) {
+  if (close !== -1 && close <= offset) {
     return undefined;
   }
   const tagEnd = body.indexOf('>', open);
@@ -287,14 +298,18 @@ export function findInStorage(
 ): { matchedAt?: MatchLevel; total: number; matches: StorageMatch[] } {
   for (const level of MATCH_LEVELS) {
     const needle = normalizeStorage(query, level).text;
-    const normalizedBody = needle ? normalizeStorage(body, level) : undefined;
-    const found = normalizedBody ? occurrences(normalizedBody.text, needle) : [];
-    if (normalizedBody && found.length > 0) {
-      const matches = found.slice(0, options.maxMatches ?? 20).map(at => describeMatch(
-        body, normalizedBody.rawAt[at], normalizedBody.rawAt[at + needle.length], options.contextChars ?? 200,
-      ));
-      return { matchedAt: level, total: found.length, matches };
+    if (!needle) {
+      continue;
     }
+    const normalizedBody = normalizeStorage(body, level);
+    const found = occurrences(normalizedBody.text, needle);
+    if (found.length === 0) {
+      continue;
+    }
+    const matches = found.slice(0, options.maxMatches ?? 20).map(at => describeMatch(
+      body, normalizedBody.rawAt[at], normalizedBody.rawAt[at + needle.length], options.contextChars ?? 200,
+    ));
+    return { matchedAt: level, total: found.length, matches };
   }
   return { total: 0, matches: [] };
 }

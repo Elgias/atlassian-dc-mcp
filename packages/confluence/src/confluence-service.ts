@@ -378,7 +378,7 @@ export const confluenceToolSchemas = {
     edits: z.array(z.object({
       oldStr: z.string().describe("Text of the current storage body to replace; must occur exactly once. Non-breaking spaces may be typed as plain spaces."),
       newStr: z.string().describe("Replacement text; empty deletes oldStr"),
-    })).min(1).optional().describe("Find/replace edits applied in order to the current storage body, instead of sending the whole body in content. Each oldStr is matched exactly, else ignoring how Confluence stores markup (character references such as &nbsp;, ac:macro-id, empty parameters), else also ignoring space variants and invisible characters, else also typographic quotes and dashes; the first level with a match is used and it must match exactly once. Only the parts that differ between oldStr and newStr are rewritten, so the stored form around them is kept. All or none: if any oldStr is missing or not unique, nothing is saved. Requires version to be the current version + 1."),
+    })).min(1).optional().describe("Find/replace edits applied in order to the current storage body, instead of sending the whole body in content. Each oldStr is matched exactly, else ignoring how Confluence stores markup (character references such as &nbsp;, ac:macro-id, empty parameters), else also ignoring space variants, invisible characters and line breaks after block-level closing tags, else also typographic quotes and dashes; the first level with a match is used and it must match exactly once. Only the parts that differ between oldStr and newStr are rewritten, so the stored form around them is kept. All or none: if any oldStr is missing or not unique, nothing is saved. Requires version to be the current version + 1."),
     version: z.number().describe("New version number (must be incremented)"),
     versionComment: z.string().optional().describe("Comment for this version"),
     parentId: z.string().optional().describe("ID of the new parent page (moves the page under this parent; must be different from contentId; same mechanism as createContent parentId)"),
@@ -392,7 +392,8 @@ export const confluenceToolSchemas = {
   },
   updateContentFileFields: {
     contentPath: z.string().optional().describe("Path to a UTF-8 file with the whole new storage-format body, relative to the server-configured upload directory. Needs the upload directory to be enabled on the server."),
-    editedPath: z.string().optional().describe("Path to a copy of the current body edited locally (storage or editable form from confluence_saveContentBody), relative to the server-configured upload directory. Only the differences from the current body are applied; space variants and invisible characters do not count as differences. Requires version to be the current version + 1. Needs the upload directory to be enabled on the server.")
+    editedPath: z.string().optional().describe("Path to a copy of the current body edited locally (the storage or editable form that confluence_saveContentBody saves when downloads are enabled), relative to the server-configured upload directory. Only the differences from the current body are applied; space variants, invisible characters and line breaks after block-level closing tags do not count as differences. Requires baseVersion and version = current version + 1. Needs the upload directory to be enabled on the server."),
+    baseVersion: z.number().int().optional().describe("With editedPath: the version of the page the edited copy was saved from, as in its file name. It must still be the current version, so a stale copy cannot revert newer changes.")
   },
   updateContentSaveFields: {
     saveResult: z.enum(['storage', 'editable']).optional().describe("After saving, write the stored body of the new version into the server-configured download directory in this form, so the next edit starts from it. Needs the download directory to be enabled on the server; otherwise the update is refused before anything is written.")
@@ -405,7 +406,7 @@ export const confluenceToolSchemas = {
   },
   saveContentBody: {
     contentId: z.string().describe("ID of the content whose body to save"),
-    form: z.enum(['storage', 'editable']).optional().describe("storage (default): the body exactly as stored. editable: space variants as plain spaces, invisible characters, macro ids and empty parameters dropped and character references decoded, for editing as plain text and sending back with editedPath."),
+    form: z.enum(['storage', 'editable']).optional().describe("storage (default): the body exactly as stored. editable: one block per line, space variants as plain spaces, invisible characters, macro ids and empty parameters dropped and character references decoded, for editing as plain text and sending back with editedPath (which needs the upload directory)."),
     saveName: z.string().optional().describe("File name (no directories). Defaults to <contentId>-v<version>.<form>.xml. Existing files are never overwritten.")
   },
   searchSpaces: {

@@ -4,6 +4,7 @@ import { shapeConfluenceMutationAck } from './confluence-response-mapper.js';
 import type { ConfluenceContent } from './confluence-service.js';
 import { getStorageContent, type StorageContent } from './content-body.js';
 import { readUploadedText, saveBodyFile, type BodyForm, type SavedBody } from './content-files.js';
+import type { MatchLevel } from './storage-normalization.js';
 import {
   applyStorageEdits,
   compareStoredBody,
@@ -33,6 +34,7 @@ export interface PageUpdate {
   parentId?: string;
   output?: 'ack' | 'full';
   body: BodySource;
+  baseVersion?: number;
   dryRun?: boolean;
   onInlineCommentLoss?: InlineCommentLoss;
   saveResult?: BodyForm;
@@ -46,10 +48,24 @@ interface PlannedBody {
   lostInlineCommentRefs: string[];
 }
 
+interface ChangePreview {
+  offset: number;
+  removed: string;
+  inserted: string;
+}
+
+interface AppliedEditPreview {
+  index: number;
+  matchedAt: MatchLevel;
+  offset: number;
+  changeCount: number;
+  changes: ChangePreview[];
+}
+
 interface BodyUpdateReport {
   source?: keyof BodySource;
-  applied?: unknown[];
-  changes?: unknown[];
+  applied?: AppliedEditPreview[];
+  changes?: ChangePreview[];
   changeCount?: number;
   lostInlineCommentRefs?: string[];
   verification?: ReturnType<typeof compareStoredBody>;
@@ -65,6 +81,10 @@ function provided(value: string | undefined): value is string {
   return value !== undefined && value !== '';
 }
 
+function suppliedSources(body: BodySource): string[] {
+  return Object.entries(body).filter(([, value]) => value !== undefined && value !== '').map(([name]) => name);
+}
+
 function validationError(update: PageUpdate, gateway: AttachmentGateway): string | undefined {
   if (update.parentId && update.parentId === update.contentId) {
     return `parentId (${update.parentId}) must be different from contentId; a page cannot be its own parent`;
@@ -72,11 +92,7 @@ function validationError(update: PageUpdate, gateway: AttachmentGateway): string
   if (update.saveResult && !gateway.download.enabled) {
     return 'saveResult needs the download directory, and saving files is disabled on this server; nothing was written';
   }
-  const { content, contentPath, edits, editedPath } = update.body;
-  const sources = Object.entries({ content, contentPath, editedPath })
-    .filter(([, value]) => provided(value))
-    .map(([name]) => name)
-    .concat(edits ? ['edits'] : []);
+  const sources = suppliedSources(update.body);
   return sources.length > 1
     ? `Pass at most one of content, contentPath, edits and editedPath; got ${sources.join(', ')}`
     : undefined;
@@ -88,6 +104,18 @@ function assertEditableVersion(current: StorageContent, version: number): void {
     throw new Error(
       `Page ${current.id} is at version ${currentVersion}, so version must be ${currentVersion + 1}. ` +
       'Re-read the page if it changed since you prepared the edits.',
+    );
+  }
+}
+
+function assertCopyBase(current: StorageContent, baseVersion: number | undefined): void {
+  if (baseVersion === undefined) {
+    throw new Error('editedPath needs baseVersion: the version of the page the edited copy was saved from');
+  }
+  if (baseVersion !== current.version.number) {
+    throw new Error(
+      `The edited copy was saved from version ${baseVersion}, but page ${current.id} is at version ` +
+      `${current.version.number}; save a fresh copy and redo the edits.`,
     );
   }
 }
@@ -112,6 +140,7 @@ async function planBody(
   }
   if (provided(editedPath)) {
     assertEditableVersion(current, update.version);
+    assertCopyBase(current, update.baseVersion);
     const { body, changes } = mergeEditedBody(currentBody, await readUploadedText(editedPath, gateway.upload));
     return { source: 'editedPath', body, changes };
   }
@@ -122,7 +151,7 @@ function clip(text: string): string {
   return text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS)}… (+${text.length - PREVIEW_CHARS} chars)` : text;
 }
 
-function previewChanges(changes: BodyChange[]) {
+function previewChanges(changes: BodyChange[]): ChangePreview[] {
   return changes.slice(0, PREVIEW_CHANGES).map(({ offset, removed, inserted }) => ({ offset, removed: clip(removed), inserted: clip(inserted) }));
 }
 
@@ -130,7 +159,9 @@ function summarize(planned: PlannedBody): BodyUpdateReport {
   return {
     source: planned.source,
     ...(planned.applied ? {
-      applied: planned.applied.map(({ index, matchedAt, offset, changes }) => ({ index, matchedAt, offset, changes: previewChanges(changes) })),
+      applied: planned.applied.map(({ index, matchedAt, offset, changes }) => ({
+        index, matchedAt, offset, changeCount: changes.length, changes: previewChanges(changes),
+      })),
     } : {}),
     ...(planned.changes ? { changeCount: planned.changes.length, changes: previewChanges(planned.changes) } : {}),
     ...(planned.lostInlineCommentRefs.length > 0 ? { lostInlineCommentRefs: planned.lostInlineCommentRefs } : {}),
@@ -164,12 +195,16 @@ async function reportAfterWrite(update: PageUpdate, planned: PlannedBody | undef
     return { ...report, verificationError: stored.error };
   }
   const storedBody = stored.data.body.storage.value;
-  if (planned) {
+  const storedVersion = stored.data.version.number;
+  if (planned && storedVersion === update.version) {
     report.verification = compareStoredBody(planned.body, storedBody);
+  } else if (planned) {
+    report.verificationError = `Page ${update.contentId} was at version ${storedVersion} when re-read, not ${update.version}; ` +
+      'another save came in between, so the stored body was not compared.';
   }
   if (update.saveResult) {
     try {
-      const content = { contentId: stored.data.id, version: stored.data.version.number, body: storedBody };
+      const content = { contentId: stored.data.id, version: storedVersion, body: storedBody };
       report.savedBody = await saveBodyFile(content, update.saveResult, gateway.download);
     } catch (error) {
       report.saveError = error instanceof Error ? error.message : String(error);

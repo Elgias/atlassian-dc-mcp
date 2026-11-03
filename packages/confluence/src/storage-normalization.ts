@@ -28,6 +28,7 @@ export interface TokenSpan {
 }
 
 const XML_ENTITIES = new Set(['amp', 'lt', 'gt', 'quot', 'apos']);
+const XML_SPECIAL_CODE_POINTS = new Set([0x22, 0x26, 0x27, 0x3c, 0x3e]);
 const CHARACTER_REFERENCE = /&(#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});/y;
 const MACRO_ID_ATTRIBUTE = /\s+ac:macro-id\s*=\s*(?:"[^"]*"|'[^']*')/y;
 const EMPTY_PARAMETER = /<ac:parameter\b(?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*\s*(?:\/>|><\/ac:parameter>)/y;
@@ -47,6 +48,7 @@ const TYPOGRAPHIC: Record<string, string> = {
 };
 const TOKEN = /[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu;
 
+/** Numeric references to the five XML special characters stay encoded, like their named forms. */
 function decodeReference(reference: string): string | undefined {
   if (reference[0] !== '#') {
     const codePoint = XHTML_ENTITIES.get(reference);
@@ -56,7 +58,7 @@ function decodeReference(reference: string): string | undefined {
     ? Number.parseInt(reference.slice(2), 16)
     : Number.parseInt(reference.slice(1), 10);
   const valid = codePoint > 0 && codePoint <= 0x10ffff && (codePoint < 0xd800 || codePoint > 0xdfff);
-  return valid ? String.fromCodePoint(codePoint) : undefined;
+  return valid && !XML_SPECIAL_CODE_POINTS.has(codePoint) ? String.fromCodePoint(codePoint) : undefined;
 }
 
 function foldCharacter(ch: string, level: MatchLevel): string {
@@ -128,6 +130,25 @@ function markupAt(raw: string, at: number): { length: number; replacement: strin
   return dropped ? { length: dropped[0].length, replacement: '' } : undefined;
 }
 
+/** Copies the CDATA section at `start`, folding characters only, and returns where it ends. */
+function pushCdata(raw: string, start: number, level: MatchLevel, builder: NormalizedBuilder): number {
+  const end = cdataEnd(raw, start);
+  for (let i = start; i < end; i++) {
+    builder.push(foldCharacter(raw[i], level), i);
+  }
+  return end;
+}
+
+/** Offset right after the block-level closing tag that starts at `at`, if one does. */
+function blockCloseEnd(raw: string, at: number): number | undefined {
+  const blockClose = raw[at] === '<' ? stickyMatch(BLOCK_CLOSING_TAG, raw, at) : null;
+  return blockClose ? at + blockClose[0].length : undefined;
+}
+
+function isLineBreak(ch: string): boolean {
+  return ch === '\n' || ch === '\r';
+}
+
 /** Normalises a storage-format string (a whole body or a fragment) for comparison at `level`. */
 export function normalizeStorage(raw: string, level: MatchLevel): NormalizedStorage {
   if (level === 'exact') {
@@ -135,33 +156,24 @@ export function normalizeStorage(raw: string, level: MatchLevel): NormalizedStor
   }
   const builder = new NormalizedBuilder();
   const foldsLayout = level === 'spacing' || level === 'typography';
-  let lineBreaksFrom = -1;
+  let afterBlockClose: number | undefined;
   let at = 0;
   while (at < raw.length) {
     if (raw.startsWith(CDATA_OPEN, at)) {
-      const end = cdataEnd(raw, at);
-      for (let i = at; i < end; i++) {
-        builder.push(foldCharacter(raw[i], level), i);
-      }
-      at = end;
+      at = pushCdata(raw, at, level, builder);
       continue;
     }
-    if (foldsLayout && at === lineBreaksFrom && (raw[at] === '\n' || raw[at] === '\r')) {
-      lineBreaksFrom = ++at;
+    if (foldsLayout && at === afterBlockClose && isLineBreak(raw[at])) {
+      at++;
+      afterBlockClose = at;
       continue;
     }
-    if (foldsLayout && raw[at] === '<') {
-      const blockClose = stickyMatch(BLOCK_CLOSING_TAG, raw, at);
-      lineBreaksFrom = blockClose ? at + blockClose[0].length : lineBreaksFrom;
+    if (foldsLayout) {
+      afterBlockClose = blockCloseEnd(raw, at) ?? afterBlockClose;
     }
     const markup = markupAt(raw, at);
-    if (markup) {
-      builder.push(foldCharacter(markup.replacement, level), at);
-      at += markup.length;
-      continue;
-    }
-    builder.push(foldCharacter(raw[at], level), at);
-    at++;
+    builder.push(foldCharacter(markup?.replacement ?? raw[at], level), at);
+    at += markup?.length ?? 1;
   }
   return builder.finish(raw.length);
 }

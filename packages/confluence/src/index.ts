@@ -123,6 +123,7 @@ server.tool(
     contentPath?: string;
     edits?: StorageEdit[];
     editedPath?: string;
+    baseVersion?: number;
     version: number;
     versionComment?: string;
     parentId?: string;
@@ -205,7 +206,7 @@ server.tool(
 if (downloadSaveEnabled) {
   server.tool(
     "confluence_saveContentBody",
-    `Save the storage-format body of content in the ${confluenceInstanceType} into the server-configured download directory and return the version and the saved file path, without the body. The editable form can be edited as plain text and sent back with editedPath on confluence_updateContent. Existing files are never overwritten.`,
+    `Save the storage-format body of content in the ${confluenceInstanceType} into the server-configured download directory and return the version and the saved file path, without the body. The editable form, one block per line, can be edited as plain text and sent back with editedPath on confluence_updateContent when the server's upload directory is enabled. Existing files are never overwritten.`,
     confluenceToolSchemas.saveContentBody,
     async ({ contentId, form, saveName }) => {
       const result = await confluenceService.saveContentBody(contentId, attachmentGateway.download, { form, saveName });

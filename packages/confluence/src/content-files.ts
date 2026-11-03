@@ -22,25 +22,26 @@ export interface SavedBody {
   length: number;
 }
 
-/** Reads a UTF-8 file from the upload root; page bodies share the attachment exchange directories. */
+/** Reads a UTF-8 file from the upload root without a leading BOM; page bodies share the attachment directories. */
 export async function readUploadedText(requestedPath: string, side: AttachmentGatewaySide): Promise<string> {
   if (!side.enabled) {
     throw new Error('Reading page bodies from files needs the upload directory, which is disabled on this server');
   }
   const { absolutePath } = await resolveUploadSource({ requestedPath, side });
-  return readFile(absolutePath, 'utf8');
+  const text = await readFile(absolutePath, 'utf8');
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
-/** The body of a new page: inline `content` or a file at `contentPath` in the upload root, exactly one of them. */
+/** The body of a new page: inline `content` or a file at `contentPath` in the upload root; an empty value counts as absent. */
 export async function resolveCreateBody(
   content: string | undefined,
   contentPath: string | undefined,
   side: AttachmentGatewaySide,
 ): Promise<ApiErrorResponse<string>> {
-  if (content !== undefined && contentPath !== undefined) {
+  if (content && contentPath) {
     return { success: false, error: 'Pass either content or contentPath, not both' };
   }
-  if (contentPath === undefined) {
+  if (!contentPath) {
     return content === undefined
       ? { success: false, error: 'Either content or contentPath is required' }
       : { success: true, data: content };
@@ -59,9 +60,13 @@ export async function saveBodyFile(
   side: AttachmentGatewaySide,
   saveName?: string,
 ): Promise<SavedBody> {
+  const text = bodyInForm(content.body, form);
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (bytes > side.maxBytes) {
+    throw new Error(`The ${form} body is ${bytes} bytes, over the configured download limit of ${side.maxBytes} bytes`);
+  }
   const requestedName = saveName ?? `${content.contentId}-v${content.version}.${form}.xml`;
   const savedPath = await resolveDownloadDestination({ requestedName, side });
-  const text = bodyInForm(content.body, form);
   await writeFile(savedPath, text, { encoding: 'utf8', flag: 'wx' });
   return { savedPath, form, length: text.length };
 }

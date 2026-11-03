@@ -12,11 +12,19 @@ export interface StorageContent {
   body: { storage: { value: string } };
 }
 
+function isStorageContent(value: unknown): value is StorageContent {
+  const content = value as { body?: { storage?: { value?: unknown } }; version?: { number?: unknown } } | null;
+  return typeof content?.body?.storage?.value === 'string' && typeof content.version?.number === 'number';
+}
+
 export async function getStorageContent(contentId: string): Promise<ApiErrorResponse<StorageContent>> {
-  return handleApiOperation(
-    async () => (await ContentResourceService.getContentById(contentId, 'body.storage,version,space')) as unknown as StorageContent,
-    'Error getting content',
-  );
+  return handleApiOperation(async () => {
+    const content: unknown = await ContentResourceService.getContentById(contentId, 'body.storage,version,space');
+    if (!isStorageContent(content)) {
+      throw new Error(`Content ${contentId} has no storage body to read or edit`);
+    }
+    return content;
+  }, 'Error getting content');
 }
 
 export async function findInContent(

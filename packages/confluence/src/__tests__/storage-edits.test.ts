@@ -179,6 +179,7 @@ describe('inline comment markers', () => {
     expect(inlineCommentRefAt(body, body.indexOf('reviewed'))).toBe('r1');
     expect(inlineCommentRefAt(body, body.indexOf('Intro'))).toBeUndefined();
     expect(inlineCommentRefAt(body, body.indexOf('tail'))).toBeUndefined();
+    expect(inlineCommentRefAt(body, body.indexOf('</ac:inline-comment-marker>'))).toBeUndefined();
   });
 });
 

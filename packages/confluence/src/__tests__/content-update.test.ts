@@ -59,11 +59,40 @@ describe('updatePage', () => {
         id: '42', type: 'page', title: 'Big page', spaceKey: 'DOC', version: 8,
         bodyUpdate: {
           source: 'edits',
-          applied: [{ index: 0, matchedAt: 'spacing', offset: BODY.indexOf('Status'), changes: [{ offset: BODY.indexOf('draft'), removed: 'draft', inserted: 'approved' }] }],
+          applied: [{
+            index: 0, matchedAt: 'spacing', offset: BODY.indexOf('Status'), changeCount: 1,
+            changes: [{ offset: BODY.indexOf('draft'), removed: 'draft', inserted: 'approved' }],
+          }],
           verification: { storedMatchesSent: true, normalisedByServer: false },
         },
       },
     });
+  });
+
+  it('refuses an edited copy without its base version or saved from an older one', async () => {
+    fs.writeFileSync(path.join(root, 'edited.xml'), BODY.replace('draft', 'final'));
+    getContentById.mockResolvedValue(page(7, BODY));
+
+    expect((await run({ body: { editedPath: 'edited.xml' } })).error).toMatch(/editedPath needs baseVersion/);
+    expect((await run({ body: { editedPath: 'edited.xml' }, baseVersion: 6 })).error)
+      .toMatch(/saved from version 6, but page 42 is at version 7/);
+    expect(update2).not.toHaveBeenCalled();
+  });
+
+  it('refuses edits with a version above current + 1', async () => {
+    getContentById.mockResolvedValue(page(7, BODY));
+    const result = await run({ body: { edits: [{ oldStr: 'Plan', newStr: 'Roadmap' }] }, version: 9 });
+    expect(result.error).toMatch(/at version 7, so version must be 8/);
+    expect(update2).not.toHaveBeenCalled();
+  });
+
+  it('does not compare against a version someone else saved after this update', async () => {
+    getContentById.mockResolvedValueOnce(page(7, BODY)).mockResolvedValueOnce(page(9, '<p>someone else</p>'));
+
+    const result = await run({ body: { edits: [{ oldStr: 'Plan', newStr: 'Roadmap' }] } });
+
+    expect(result.data).toMatchObject({ bodyUpdate: { verificationError: expect.stringMatching(/version 9 when re-read, not 8/) } });
+    expect(result.data).not.toHaveProperty('bodyUpdate.verification');
   });
 
   it('refuses edits prepared against another version', async () => {
@@ -77,7 +106,7 @@ describe('updatePage', () => {
     fs.writeFileSync(path.join(root, 'edited.xml'), BODY.replace(NBSP, ' ').replace('draft', 'final'));
     getContentById.mockResolvedValueOnce(page(7, BODY)).mockResolvedValueOnce(page(8, BODY.replace('draft', 'final')));
 
-    const result = await run({ body: { editedPath: 'edited.xml' } });
+    const result = await run({ body: { editedPath: 'edited.xml' }, baseVersion: 7 });
 
     expect(update2.mock.calls[0][1].body.storage.value).toBe(BODY.replace('draft', 'final'));
     expect(result.data).toMatchObject({ bodyUpdate: { source: 'editedPath', changeCount: 1, verification: { storedMatchesSent: true } } });
@@ -146,7 +175,7 @@ describe('updatePage', () => {
     gateway = { upload: { ...gateway.upload, enabled: false }, download: { ...gateway.download, enabled: false } };
 
     expect((await run({ body: { contentPath: 'page.xml' } })).error).toMatch(/upload directory, which is disabled/);
-    expect((await run({ body: { editedPath: 'page.xml' } })).error).toMatch(/upload directory, which is disabled/);
+    expect((await run({ body: { editedPath: 'page.xml' }, baseVersion: 7 })).error).toMatch(/upload directory, which is disabled/);
     expect((await run({ body: { content: BODY }, saveResult: 'storage' })).error).toMatch(/saving files is disabled/);
     expect(update2).not.toHaveBeenCalled();
   });

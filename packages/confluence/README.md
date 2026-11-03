@@ -246,7 +246,8 @@ Parameters:
 - `content` (string, optional): New content body in Confluence Data Center's storage format (XML-based)
 - `contentPath` (string, optional): Path to a UTF-8 file with the whole new body, relative to the server-configured upload directory. Needs uploads to be enabled on the server.
 - `edits` (array of `{ oldStr, newStr }`, optional): Find/replace edits applied in order to the current storage body, so a small change doesn't need the whole body resent. See [Edits and stored form](#edits-and-stored-form). If any edit doesn't match, nothing is saved. `version` must be the current version + 1.
-- `editedPath` (string, optional): Path to a copy of the current body edited locally — the `storage` or `editable` form saved by `confluence_saveContentBody` — relative to the server-configured upload directory. Only the differences from the current body are applied; space variants and invisible characters don't count as differences. `version` must be the current version + 1. Needs uploads to be enabled on the server.
+- `editedPath` (string, optional): Path to a copy of the current body edited locally — the `storage` or `editable` form saved by `confluence_saveContentBody` when downloads are enabled — relative to the server-configured upload directory. Only the differences from the current body are applied; space variants, invisible characters and line breaks after block-level closing tags don't count as differences. Needs `baseVersion`, and `version` must be the current version + 1. Needs uploads to be enabled on the server.
+- `baseVersion` (number, optional): With `editedPath`, the version of the page the edited copy was saved from, as in its file name. It must still be the current version, so a stale copy cannot revert newer changes.
 - `version` (number, required): New version number (must be incremented from current version)
 - `versionComment` (string, optional): Comment for this version
 - `parentId` (string, optional): ID of the new parent page (moves the page under this parent; must be different from `contentId`; uses Confluence `ancestors`, same as `createContent` `parentId`)
@@ -255,7 +256,14 @@ Parameters:
 - `saveResult` (`storage` | `editable`, optional): After saving, write the stored body of the new version into the server-configured download directory in this form, so the next edit starts from the current text. A failed save is reported as `bodyUpdate.saveError` and does not undo the update. Needs downloads to be enabled on the server; otherwise the update is refused before anything is written.
 - `output` (`ack` | `full`, optional): Return a compact acknowledgement or the full API response. Defaults to `ack`.
 
-After a body change the server re-reads the page and adds `bodyUpdate` to the response: the source, the applied edits or the changes, the inline comment refs the new body dropped, and `verification` — `storedMatchesSent` (Confluence stored the content that was sent), `normalisedByServer` (it rewrote the form, e.g. character references or macro ids) and, when the content differs, `firstDifference`.
+After a body change the server re-reads the page and adds `bodyUpdate` to the response:
+
+- `source` and either `applied` (per edit: `index`, `matchedAt`, `offset`, `changeCount`, `changes`) or `changeCount` and `changes` for `editedPath`. A change is `{ offset, removed, inserted }`; up to 20 changes are listed, and a `removed` or `inserted` longer than 200 characters is cut and ends with `… (+N chars)`;
+- `lostInlineCommentRefs` when the new body dropped inline comment markers and the update was not refused;
+- `verification` — `storedMatchesSent` (Confluence stored the content that was sent), `normalisedByServer` (it rewrote the form, e.g. character references or macro ids) and, when the content differs, `firstDifference`. `verificationError` replaces it when the page could not be re-read or another save came in between;
+- `savedBody` or `saveError` with `saveResult`.
+
+A refused update answers `success: false` with the lost refs in `details.lostInlineCommentRefs`.
 
 ##### Edits and stored form
 
@@ -263,7 +271,7 @@ Confluence rewrites the storage body it saves: character references become chara
 
 1. `exact` — byte for byte;
 2. `markup` — also ignoring character references other than the five XML ones, `ac:macro-id` attributes and empty `ac:parameter` elements (not inside CDATA);
-3. `spacing` — also reading space variants (U+00A0, U+202F, …) as a plain space and ignoring invisible format characters (U+200B, U+00AD, …);
+3. `spacing` — also reading space variants (U+00A0, U+202F, …) as a plain space and ignoring invisible format characters (U+200B, U+00AD, …) and line breaks right after a block-level closing tag (`</p>`, `</td>`, `</ac:structured-macro>`, …);
 4. `typography` — also reading typographic quotes and dashes as `'`, `"` and `-`.
 
 Only the tokens that differ between `oldStr` and `newStr` are rewritten, so the stored form around them — non-breaking spaces, character references, macro ids — is kept. The response reports the level each edit matched at and the changes it made.
@@ -320,9 +328,9 @@ Returns the content `version`, `bodyLength`, `matchedAt` (the level), `total`, a
 
 #### 9. confluence_saveContentBody
 
-Save the storage body of a page into the server-configured download directory and return the `version` and `savedBody` (`savedPath`, `form`, `length`) without the body. Only registered when filesystem downloads are enabled (see [Attachment filesystem access](#attachment-filesystem-access-opt-in)).
+Save the storage body of a page into the server-configured download directory and return the `version` and `savedBody` (`savedPath`, `form`, `length`) without the body. A body over `CONFLUENCE_ATTACHMENTS_MAX_DOWNLOAD_BYTES` is refused. Only registered when filesystem downloads are enabled (see [Attachment filesystem access](#attachment-filesystem-access-opt-in)).
 
 Parameters:
 - `contentId` (string, required): ID of the content whose body to save
-- `form` (`storage` | `editable`, optional): `storage` (default) is the body exactly as stored. `editable` reads space variants as plain spaces and drops invisible characters, macro ids and empty parameters and decodes character references, so it can be edited as plain text and sent back with `editedPath` — not as a whole new body.
+- `form` (`storage` | `editable`, optional): `storage` (default) is the body exactly as stored. `editable` puts one block per line, reads space variants as plain spaces, drops invisible characters, macro ids and empty parameters and decodes character references, so it can be edited as plain text and sent back with `editedPath` (which needs uploads to be enabled) — not as a whole new body.
 - `saveName` (string, optional): File name (no directories). Defaults to `<contentId>-v<version>.<form>.xml`. Existing files are never overwritten.

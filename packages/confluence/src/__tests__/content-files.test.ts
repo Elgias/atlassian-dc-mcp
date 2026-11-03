@@ -50,6 +50,12 @@ describe('page bodies on the local filesystem', () => {
     });
   });
 
+  it('reads an empty content as absent and drops a leading BOM', async () => {
+    fs.writeFileSync(path.join(root, 'page.xml'), '\ufeff<p>body</p>', 'utf8');
+    expect(await resolveCreateBody('', 'page.xml', side())).toEqual({ success: true, data: '<p>body</p>' });
+    expect(await resolveCreateBody('', undefined, side())).toEqual({ success: true, data: '' });
+  });
+
   it('refuses an upload file over the size limit', async () => {
     fs.writeFileSync(path.join(root, 'big.xml'), 'x'.repeat(2048));
     await expect(readUploadedText('big.xml', side())).rejects.toThrow(/exceeds/);
@@ -62,6 +68,7 @@ describe('page bodies on the local filesystem', () => {
       expect(saved).toEqual({ savedPath: path.join(root, '42-v3.editable.xml'), form: 'editable', length: 11 });
       expect(fs.readFileSync(saved.savedPath, 'utf8')).toBe('<p>a b</p>\n');
       await expect(saveBodyFile(content, 'editable', side())).rejects.toThrow();
+      await expect(saveBodyFile({ ...content, body: 'x'.repeat(2048) }, 'storage', side(), 'big.xml')).rejects.toThrow(/over the configured download limit/);
       expect((await saveBodyFile(content, 'storage', side(), 'copy.xml')).savedPath).toBe(path.join(root, 'copy.xml'));
     });
   });
@@ -90,6 +97,11 @@ describe('page bodies on the local filesystem', () => {
           savedBody: { savedPath: path.join(root, '42-v5.storage.xml'), form: 'storage', length: 15 },
         },
       });
+    });
+
+    it('reports content without a storage body', async () => {
+      (ContentResourceService.getContentById as jest.Mock).mockResolvedValue({ ...page, body: {} });
+      expect((await findInContent('42', 'rule')).error).toBe('Content 42 has no storage body to read or edit');
     });
 
     it('passes a read failure through', async () => {
