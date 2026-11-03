@@ -382,7 +382,7 @@ export const confluenceToolSchemas = {
     version: z.number().describe("New version number (must be incremented)"),
     versionComment: z.string().optional().describe("Comment for this version"),
     parentId: z.string().optional().describe("ID of the new parent page (moves the page under this parent; must be different from contentId; same mechanism as createContent parentId)"),
-    dryRun: z.boolean().optional().describe("Prepare the new body and report what would change (matched edits, changes, lengths, inline comments that would be lost) without saving"),
+    dryRun: z.boolean().optional().describe("Prepare the new body and report what would change (matched edits, changes, lengths, inline comments that would be lost, and wouldBeRefused when the update would be refused for them) without saving"),
     onInlineCommentLoss: z.enum(['refuse', 'report']).optional().describe("What to do when the new body removes <ac:inline-comment-marker> elements, detaching their comment threads: refuse writes nothing; report writes and lists the lost refs in bodyUpdate.lostInlineCommentRefs. Defaults to refuse for edits and editedPath and to report for content and contentPath."),
     output: z.enum(['ack', 'full']).optional().describe("Return a compact acknowledgement or the full API response. Defaults to ack.")
   },

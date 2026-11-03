@@ -64,7 +64,7 @@ server.tool(
 
 server.tool(
   "confluence_createContent",
-  `Create new content in ${confluenceInstanceType}. The body can also be read from a file in the server-configured upload directory (contentPath).`,
+  `Create new content in ${confluenceInstanceType}. When the server-configured upload directory is enabled, the body can also be read from a file there (contentPath).`,
   { ...confluenceToolSchemas.createContent, ...confluenceToolSchemas.createContentFileFields },
   async ({ title, spaceKey, type, content, contentPath, parentId, output }: {
     title: string;

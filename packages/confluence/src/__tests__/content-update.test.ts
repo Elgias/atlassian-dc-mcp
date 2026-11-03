@@ -135,6 +135,39 @@ describe('updatePage', () => {
     expect(update2).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses an edited copy that drops an inline comment marker by default', async () => {
+    fs.writeFileSync(path.join(root, 'edited.xml'), BODY.replace(MARKER, 'reviewed'));
+    getContentById.mockResolvedValue(page(7, BODY));
+
+    const result = await run({ body: { editedPath: 'edited.xml' }, baseVersion: 7 });
+
+    expect(result).toMatchObject({ success: false, details: { lostInlineCommentRefs: ['r1'] } });
+    expect(update2).not.toHaveBeenCalled();
+  });
+
+  it('updates the title of content without a storage body', async () => {
+    getContentById.mockResolvedValue({ id: '42', type: 'page', title: 'Old', space: { key: 'DOC' }, version: { number: 7 } });
+
+    const result = await run({ title: 'Renamed' });
+
+    expect(result.success).toBe(true);
+    expect(update2.mock.calls[0][1]).toMatchObject({ title: 'Renamed', version: { number: 8 } });
+    expect(update2.mock.calls[0][1]).not.toHaveProperty('body');
+  });
+
+  it('reports a failed re-read as both verification and save errors', async () => {
+    getContentById.mockResolvedValueOnce(page(7, BODY)).mockRejectedValueOnce({ status: 503, statusText: 'Service Unavailable', body: {} });
+
+    const result = await run({ body: { content: BODY }, saveResult: 'storage' });
+
+    expect(result.data).toMatchObject({
+      bodyUpdate: {
+        verificationError: 'the page could not be re-read: Error getting content: 503 Service Unavailable',
+        saveError: 'the page could not be re-read: Error getting content: 503 Service Unavailable',
+      },
+    });
+  });
+
   it('writes a whole body that drops an inline comment marker and reports it, unless told to refuse', async () => {
     getContentById.mockResolvedValue(page(7, BODY));
 

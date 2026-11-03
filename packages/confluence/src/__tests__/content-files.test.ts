@@ -104,6 +104,12 @@ describe('page bodies on the local filesystem', () => {
       expect((await findInContent('42', 'rule')).error).toBe('Content 42 has no storage body to read or edit');
     });
 
+    it('reports content without a version', async () => {
+      const { version: _version, ...withoutVersion } = page;
+      (ContentResourceService.getContentById as jest.Mock).mockResolvedValue(withoutVersion);
+      expect((await findInContent('42', 'rule')).error).toBe('Content 42 has no version');
+    });
+
     it('passes a read failure through', async () => {
       (ContentResourceService.getContentById as jest.Mock).mockRejectedValue({ status: 404, statusText: 'Not Found', body: {} });
       expect((await saveContentBody('42', side())).error).toBe('Error getting content: 404 Not Found');

@@ -256,12 +256,12 @@ Parameters:
 - `saveResult` (`storage` | `editable`, optional): After saving, write the stored body of the new version into the server-configured download directory in this form, so the next edit starts from the current text. A failed save is reported as `bodyUpdate.saveError` and does not undo the update. Needs downloads to be enabled on the server; otherwise the update is refused before anything is written.
 - `output` (`ack` | `full`, optional): Return a compact acknowledgement or the full API response. Defaults to `ack`.
 
-After a body change the server re-reads the page and adds `bodyUpdate` to the response:
+After a body change, or with `saveResult`, the server re-reads the page and adds `bodyUpdate` to the response:
 
 - `source` and either `applied` (per edit: `index`, `matchedAt`, `offset`, `changeCount`, `changes`) or `changeCount` and `changes` for `editedPath`. A change is `{ offset, removed, inserted }`; up to 20 changes are listed, and a `removed` or `inserted` longer than 200 characters is cut and ends with `… (+N chars)`;
 - `lostInlineCommentRefs` when the new body dropped inline comment markers and the update was not refused;
 - `verification` — `storedMatchesSent` (Confluence stored the content that was sent), `normalisedByServer` (it rewrote the form, e.g. character references or macro ids) and, when the content differs, `firstDifference`. `verificationError` replaces it when the page could not be re-read or another save came in between;
-- `savedBody` or `saveError` with `saveResult`.
+- `savedBody` or `saveError` with `saveResult`, `saveError` also when the page could not be re-read.
 
 A refused update answers `success: false` with the lost refs in `details.lostInlineCommentRefs`.
 

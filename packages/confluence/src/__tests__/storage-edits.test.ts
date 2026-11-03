@@ -169,6 +169,16 @@ describe('inline comment markers', () => {
     expect(lostInlineCommentRefs(code + MARKER, code)).toEqual(['r1']);
   });
 
+  it('counts a marker that starts right where a CDATA section ends', () => {
+    expect(lostInlineCommentRefs(`<![CDATA[x]]>${MARKER}`, '<![CDATA[x]]>')).toEqual(['r1']);
+  });
+
+  it('reads an unclosed marker opening only up to the next tag', () => {
+    const unclosed = '<p><ac:inline-comment-marker ac:ref="r1" <strong>x</strong> ac:ref="r2"</p>';
+    expect(lostInlineCommentRefs(MARKER, unclosed)).toEqual([]);
+    expect(lostInlineCommentRefs(unclosed, MARKER)).toEqual([]);
+  });
+
   it('reports refs that a new body drops', () => {
     expect(lostInlineCommentRefs(MARKER, 'reviewed text')).toEqual(['r1']);
     expect(lostInlineCommentRefs(MARKER, MARKER.replace('text', 'words'))).toEqual([]);

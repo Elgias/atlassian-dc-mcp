@@ -192,7 +192,12 @@ async function reportAfterWrite(update: PageUpdate, planned: PlannedBody | undef
   const report: BodyUpdateReport = planned ? summarize(planned) : {};
   const stored = await getStorageContent(update.contentId);
   if (!stored.success || !stored.data) {
-    return { ...report, verificationError: stored.error };
+    const reason = `the page could not be re-read: ${stored.error}`;
+    return {
+      ...report,
+      ...(planned ? { verificationError: reason } : {}),
+      ...(update.saveResult ? { saveError: reason } : {}),
+    };
   }
   const storedBody = stored.data.body.storage.value;
   const storedVersion = stored.data.version.number;
@@ -225,7 +230,7 @@ export async function updatePage(update: PageUpdate, gateway: AttachmentGateway)
   if (invalid) {
     return { success: false, error: invalid };
   }
-  const current = await getStorageContent(update.contentId);
+  const current = await getStorageContent(update.contentId, { requireBody: suppliedSources(update.body).length > 0 });
   if (!current.success || !current.data) {
     return { success: false, error: `Failed to retrieve content with ID ${update.contentId}: ${current.error || 'Unknown error'}` };
   }

@@ -252,7 +252,10 @@ export function inlineCommentRefAt(body: string, offset: number): string | undef
   return /\bac:ref="([^"]+)"/.exec(body.slice(open, tagEnd === -1 ? undefined : tagEnd))?.[1];
 }
 
-/** Refs of the inline comment markers of a body; marker text inside CDATA is code, not a marker. */
+/**
+ * Refs of the inline comment markers of a body; marker text inside CDATA is code, not a marker. Each
+ * marker is read only up to the next `<`, so the slices never overlap, also in an unclosed new body.
+ */
 function inlineCommentRefs(body: string): Set<string> {
   const refs = new Set<string>();
   const cdata = cdataRanges(body);
@@ -264,8 +267,8 @@ function inlineCommentRefs(body: string): Set<string> {
     if (next < cdata.length && cdata[next].start <= at) {
       continue;
     }
-    const tagEnd = body.indexOf('>', at);
-    const ref = MARKER_REF.exec(body.slice(at, tagEnd === -1 ? undefined : tagEnd))?.[1];
+    const nextTag = body.indexOf('<', at + 1);
+    const ref = MARKER_REF.exec(body.slice(at, nextTag === -1 ? undefined : nextTag))?.[1];
     if (ref) {
       refs.add(ref);
     }

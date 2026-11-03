@@ -12,18 +12,27 @@ export interface StorageContent {
   body: { storage: { value: string } };
 }
 
-function isStorageContent(value: unknown): value is StorageContent {
-  const content = value as { body?: { storage?: { value?: unknown } }; version?: { number?: unknown } } | null;
-  return typeof content?.body?.storage?.value === 'string' && typeof content.version?.number === 'number';
-}
+type FetchedContent = Omit<StorageContent, 'version' | 'body'> & {
+  version?: { number?: unknown };
+  body?: { storage?: { value?: unknown } };
+};
 
-export async function getStorageContent(contentId: string): Promise<ApiErrorResponse<StorageContent>> {
+/** Reads content with its storage body; without `requireBody` a missing body reads as empty. */
+export async function getStorageContent(
+  contentId: string,
+  options: { requireBody?: boolean } = {},
+): Promise<ApiErrorResponse<StorageContent>> {
   return handleApiOperation(async () => {
-    const content: unknown = await ContentResourceService.getContentById(contentId, 'body.storage,version,space');
-    if (!isStorageContent(content)) {
+    const content = (await ContentResourceService.getContentById(contentId, 'body.storage,version,space')) as unknown as FetchedContent;
+    const version = content.version?.number;
+    const body = content.body?.storage?.value;
+    if (typeof version !== 'number') {
+      throw new Error(`Content ${contentId} has no version`);
+    }
+    if (typeof body !== 'string' && options.requireBody !== false) {
       throw new Error(`Content ${contentId} has no storage body to read or edit`);
     }
-    return content;
+    return { ...content, version: { number: version }, body: { storage: { value: typeof body === 'string' ? body : '' } } };
   }, 'Error getting content');
 }
 
